@@ -21,7 +21,16 @@ export async function connectToMongoDB() {
   }
 }
 
-connectToMongoDB()
+const mongoClient = await connectToMongoDB();
+const db = mongoClient.db("BookNook");
+const bookCollection = db.collection("books");
+
+app.post('/add-book', async (req, res) => {
+  const data = req.body;
+  const result = await bookCollection.insertOne(data);
+  console.log(result);
+  res.send(result);
+})
 
 
 app.get('/', (req, res) => {
