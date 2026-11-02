@@ -28,10 +28,21 @@ const bookCollection = db.collection("books");
 app.post('/add-book', async (req, res) => {
   const data = req.body;
   const result = await bookCollection.insertOne(data);
-  console.log(result);
   res.send(result);
 })
 
+app.get('/new-arrivals', async (req, res) => {
+  try {
+    const result = await bookCollection
+      .find()
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(6)
+      .toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch new arrivals" });
+  }
+})
 
 app.get('/', (req, res) => {
   res.send('Hello World!')
