@@ -2,12 +2,35 @@ import express from "express";
 import { MongoClient, ObjectId } from 'mongodb';
 import 'dotenv/config';
 import cors from 'cors';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const app = express()
 const port = 5000
 
 app.use(cors())
 app.use(express.json())
+
+// JWKS endpoint configuration to verify JWT tokens issued by Better Auth
+const JWKS_URL = process.env.JWKS_URL || 'http://localhost:3000/api/auth/jwks';
+const JWKS = createRemoteJWKSet(new URL(JWKS_URL));
+
+// Middleware to verify JWT token using JWKS endpoint
+export const verifyToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).send({ error: "Unauthorized: No token provided or malformed authorization header." });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const { payload } = await jwtVerify(token, JWKS);
+    req.user = payload;
+    next();
+  } catch (error) {
+    console.error("JWKS Token verification failed:", error.message);
+    return res.status(403).send({ error: "Forbidden: Invalid or expired token." });
+  }
+};
 
 // MongoDB
 const client = new MongoClient(process.env.MONGODB_URL);
@@ -341,6 +364,15 @@ const updateBorrowHandler = async (req, res) => {
 
 app.put(['/borrows/:id', '/borrow/:id'], updateBorrowHandler);
 app.patch(['/borrows/:id', '/borrow/:id'], updateBorrowHandler);
+
+// GET /verify-token (Verify JWT token via JWKS endpoint and return decoded user info)
+app.get('/verify-token', verifyToken, (req, res) => {
+  res.send({
+    valid: true,
+    message: "Token verified successfully via JWKS endpoint.",
+    user: req.user,
+  });
+});
 
 app.get('/', (req, res) => {
   res.send('Hello World!')
