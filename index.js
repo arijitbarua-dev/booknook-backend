@@ -54,11 +54,15 @@ app.get('/new-arrivals', async (req, res) => {
   }
 })
 
-// GET /books (Supports search, category filter, and sorting)
+// GET /books (Supports search, category filter, user filter, and sorting)
 app.get('/books', async (req, res) => {
   try {
-    const { category, search, sort } = req.query;
+    const { category, search, sort, addedByEmail } = req.query;
     const query = {};
+
+    if (addedByEmail) {
+      query.addedByEmail = String(addedByEmail);
+    }
 
     if (category && category !== "All") {
       query.category = { $regex: new RegExp(`^${category}$`, 'i') };
@@ -90,6 +94,67 @@ app.get('/books', async (req, res) => {
     res.status(500).send({ error: "Failed to fetch books" });
   }
 })
+
+// PUT & PATCH /books/:id (Update a book)
+const updateBookHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    let query = {};
+    if (ObjectId.isValid(id)) {
+      query = { _id: new ObjectId(id) };
+    } else {
+      query = { _id: id };
+    }
+
+    const { title, author, category, image, description, totalCopies, availableCopies } = req.body;
+    const updateDoc = {
+      $set: {
+        ...(title && { title }),
+        ...(author && { author }),
+        ...(category && { category }),
+        ...(image && { image }),
+        ...(description && { description }),
+        ...(totalCopies !== undefined && { totalCopies: Number(totalCopies) }),
+        ...(availableCopies !== undefined && { availableCopies: Number(availableCopies) }),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+
+    const result = await bookCollection.updateOne(query, updateDoc);
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ error: "Book not found." });
+    }
+
+    res.send({ success: true, message: "Book updated successfully." });
+  } catch (error) {
+    res.status(500).send({ error: "Failed to update book." });
+  }
+};
+
+app.put('/books/:id', updateBookHandler);
+app.patch('/books/:id', updateBookHandler);
+
+// DELETE /books/:id (Delete a book)
+app.delete('/books/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let query = {};
+    if (ObjectId.isValid(id)) {
+      query = { _id: new ObjectId(id) };
+    } else {
+      query = { _id: id };
+    }
+
+    const result = await bookCollection.deleteOne(query);
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ error: "Book not found." });
+    }
+
+    res.send({ success: true, message: "Book deleted successfully." });
+  } catch (error) {
+    res.status(500).send({ error: "Failed to delete book." });
+  }
+});
 
 // GET /books/:id (Get single book)
 app.get('/books/:id', async (req, res) => {
@@ -226,6 +291,41 @@ app.delete('/borrows/:id', async (req, res) => {
     res.status(500).send({ error: "Failed to return book." });
   }
 })
+
+// PUT & PATCH /borrows/:id (Update a booking / borrow record)
+const updateBorrowHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    let query = {};
+    if (ObjectId.isValid(id)) {
+      query = { _id: new ObjectId(id) };
+    } else {
+      query = { _id: id };
+    }
+
+    const { returnDate, borrowDate, notes } = req.body;
+    const updateDoc = {
+      $set: {
+        ...(returnDate && { returnDate }),
+        ...(borrowDate && { borrowDate }),
+        ...(notes && { notes }),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+
+    const result = await borrowCollection.updateOne(query, updateDoc);
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ error: "Borrowing record not found." });
+    }
+
+    res.send({ success: true, message: "Borrowing record updated successfully." });
+  } catch (error) {
+    res.status(500).send({ error: "Failed to update borrowing record." });
+  }
+};
+
+app.put('/borrows/:id', updateBorrowHandler);
+app.patch('/borrows/:id', updateBorrowHandler);
 
 app.get('/', (req, res) => {
   res.send('Hello World!')
