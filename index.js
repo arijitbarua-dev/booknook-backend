@@ -24,6 +24,7 @@ export async function connectToMongoDB() {
 const mongoClient = await connectToMongoDB();
 const db = mongoClient.db("BookNook");
 const bookCollection = db.collection("books");
+const borrowCollection = db.collection("borrows");
 
 // POST /books and /add-book
 app.post(['/books', '/add-book'], async (req, res) => {
@@ -87,6 +88,142 @@ app.get('/books', async (req, res) => {
     res.send(result);
   } catch (error) {
     res.status(500).send({ error: "Failed to fetch books" });
+  }
+})
+
+// GET /books/:id (Get single book)
+app.get('/books/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let query = {};
+    if (ObjectId.isValid(id)) {
+      query = { _id: new ObjectId(id) };
+    } else {
+      query = { _id: id };
+    }
+
+    const book = await bookCollection.findOne(query);
+    if (!book) {
+      return res.status(404).send({ error: "Book not found" });
+    }
+    res.send(book);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to retrieve book" });
+  }
+})
+
+// POST /borrows (Borrow a book)
+app.post('/borrows', async (req, res) => {
+  try {
+    const { bookId, bookTitle, bookImage, userName, userEmail, borrowDate, returnDate } = req.body;
+
+    if (!bookId || !userEmail) {
+      return res.status(400).send({ error: "bookId and userEmail are required." });
+    }
+
+    let bookQuery = {};
+    if (ObjectId.isValid(bookId)) {
+      bookQuery = { _id: new ObjectId(bookId) };
+    } else {
+      bookQuery = { _id: bookId };
+    }
+
+    // Check book availability
+    const book = await bookCollection.findOne(bookQuery);
+    if (!book) {
+      return res.status(404).send({ error: "Book not found." });
+    }
+
+    if ((book.availableCopies ?? 0) <= 0) {
+      return res.status(400).send({ error: "No available copies left for borrowing." });
+    }
+
+    // Prevent duplicate active borrowing by the same user
+    const existingBorrow = await borrowCollection.findOne({
+      bookId: String(bookId),
+      userEmail: userEmail,
+    });
+
+    if (existingBorrow) {
+      return res.status(400).send({ error: "You have already borrowed this book." });
+    }
+
+    // Atomic decrement of available copies
+    await bookCollection.updateOne(bookQuery, {
+      $inc: { availableCopies: -1 },
+    });
+
+    // Create borrowing record
+    const borrowRecord = {
+      bookId: String(bookId),
+      bookTitle: bookTitle || book.title,
+      bookImage: bookImage || book.image,
+      userName: userName || "Habib Rahman",
+      userEmail: userEmail,
+      borrowDate: borrowDate || new Date().toISOString(),
+      returnDate: returnDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    const result = await borrowCollection.insertOne(borrowRecord);
+
+    res.status(201).send({
+      success: true,
+      insertedId: result.insertedId,
+      availableCopies: (book.availableCopies ?? 1) - 1,
+    });
+  } catch (error) {
+    console.error("Borrow error:", error);
+    res.status(500).send({ error: "Failed to process book borrowing." });
+  }
+})
+
+// GET /borrows (Get borrowed books for current user)
+app.get('/borrows', async (req, res) => {
+  try {
+    const { userEmail } = req.query;
+    const query = userEmail ? { userEmail: String(userEmail) } : {};
+    const result = await borrowCollection.find(query).sort({ createdAt: -1 }).toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to retrieve borrowed books." });
+  }
+})
+
+// DELETE /borrows/:id (Return a book)
+app.delete('/borrows/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let borrowQuery = {};
+    if (ObjectId.isValid(id)) {
+      borrowQuery = { _id: new ObjectId(id) };
+    } else {
+      borrowQuery = { _id: id };
+    }
+
+    const borrowRecord = await borrowCollection.findOne(borrowQuery);
+    if (!borrowRecord) {
+      return res.status(404).send({ error: "Borrowing record not found." });
+    }
+
+    // Remove the borrowing record
+    await borrowCollection.deleteOne(borrowQuery);
+
+    // Increase available copies in bookCollection
+    let bookQuery = {};
+    if (ObjectId.isValid(borrowRecord.bookId)) {
+      bookQuery = { _id: new ObjectId(borrowRecord.bookId) };
+    } else {
+      bookQuery = { _id: borrowRecord.bookId };
+    }
+
+    await bookCollection.updateOne(bookQuery, {
+      $inc: { availableCopies: 1 },
+    });
+
+    res.send({ success: true, message: "Book returned successfully." });
+  } catch (error) {
+    res.status(500).send({ error: "Failed to return book." });
   }
 })
 
