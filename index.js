@@ -180,7 +180,7 @@ app.get('/books/:id', async (req, res) => {
 // POST /borrows (Borrow a book)
 app.post('/borrows', async (req, res) => {
   try {
-    const { bookId, bookTitle, bookImage, userName, userEmail, borrowDate, returnDate } = req.body;
+    const { bookId, bookTitle, bookImage, userName, userEmail, borrowDate, returnDate, bookAuthor, bookCategory } = req.body;
 
     if (!bookId || !userEmail) {
       return res.status(400).send({ error: "bookId and userEmail are required." });
@@ -203,10 +203,12 @@ app.post('/borrows', async (req, res) => {
       return res.status(400).send({ error: "No available copies left for borrowing." });
     }
 
+    const cleanEmail = String(userEmail).trim().toLowerCase();
+
     // Prevent duplicate active borrowing by the same user
     const existingBorrow = await borrowCollection.findOne({
       bookId: String(bookId),
-      userEmail: userEmail,
+      userEmail: { $regex: new RegExp(`^${cleanEmail}$`, 'i') },
     });
 
     if (existingBorrow) {
@@ -221,10 +223,12 @@ app.post('/borrows', async (req, res) => {
     // Create borrowing record
     const borrowRecord = {
       bookId: String(bookId),
-      bookTitle: bookTitle || book.title,
-      bookImage: bookImage || book.image,
-      userName: userName || "Habib Rahman",
-      userEmail: userEmail,
+      bookTitle: bookTitle || book.title || "Untitled Book",
+      bookImage: bookImage || book.image || "",
+      bookAuthor: bookAuthor || book.author || "",
+      bookCategory: bookCategory || book.category || "Fiction",
+      userName: userName || "Library Reader",
+      userEmail: cleanEmail,
       borrowDate: borrowDate || new Date().toISOString(),
       returnDate: returnDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
       createdAt: new Date().toISOString(),
@@ -235,25 +239,28 @@ app.post('/borrows', async (req, res) => {
     res.status(201).send({
       success: true,
       insertedId: result.insertedId,
-      availableCopies: (book.availableCopies ?? 1) - 1,
+      availableCopies: Math.max(0, (book.availableCopies ?? 1) - 1),
     });
   } catch (error) {
     console.error("Borrow error:", error);
     res.status(500).send({ error: "Failed to process book borrowing." });
   }
-})
+});
 
 // GET /borrows (Get borrowed books for current user)
 app.get('/borrows', async (req, res) => {
   try {
-    const { userEmail } = req.query;
-    const query = userEmail ? { userEmail: String(userEmail) } : {};
+    const targetEmail = req.query.userEmail || req.query.email;
+    const query = targetEmail
+      ? { userEmail: { $regex: new RegExp(`^${String(targetEmail).trim()}$`, 'i') } }
+      : {};
+
     const result = await borrowCollection.find(query).sort({ createdAt: -1 }).toArray();
     res.send(result);
   } catch (error) {
     res.status(500).send({ error: "Failed to retrieve borrowed books." });
   }
-})
+});
 
 // DELETE /borrows/:id (Return a book)
 app.delete('/borrows/:id', async (req, res) => {
@@ -266,13 +273,19 @@ app.delete('/borrows/:id', async (req, res) => {
       borrowQuery = { _id: id };
     }
 
-    const borrowRecord = await borrowCollection.findOne(borrowQuery);
+    let borrowRecord = await borrowCollection.findOne(borrowQuery);
+
+    // If not found by borrow id, attempt finding by bookId
+    if (!borrowRecord) {
+      borrowRecord = await borrowCollection.findOne({ bookId: String(id) });
+    }
+
     if (!borrowRecord) {
       return res.status(404).send({ error: "Borrowing record not found." });
     }
 
     // Remove the borrowing record
-    await borrowCollection.deleteOne(borrowQuery);
+    await borrowCollection.deleteOne({ _id: borrowRecord._id });
 
     // Increase available copies in bookCollection
     let bookQuery = {};
@@ -290,7 +303,7 @@ app.delete('/borrows/:id', async (req, res) => {
   } catch (error) {
     res.status(500).send({ error: "Failed to return book." });
   }
-})
+});
 
 // PUT & PATCH /borrows/:id (Update a booking / borrow record)
 const updateBorrowHandler = async (req, res) => {
@@ -303,12 +316,14 @@ const updateBorrowHandler = async (req, res) => {
       query = { _id: id };
     }
 
-    const { returnDate, borrowDate, notes } = req.body;
+    const { returnDate, borrowDate, notes, userEmail, userName } = req.body;
     const updateDoc = {
       $set: {
         ...(returnDate && { returnDate }),
         ...(borrowDate && { borrowDate }),
         ...(notes && { notes }),
+        ...(userEmail && { userEmail: String(userEmail).trim().toLowerCase() }),
+        ...(userName && { userName }),
         updatedAt: new Date().toISOString(),
       },
     };
@@ -324,8 +339,8 @@ const updateBorrowHandler = async (req, res) => {
   }
 };
 
-app.put('/borrows/:id', updateBorrowHandler);
-app.patch('/borrows/:id', updateBorrowHandler);
+app.put(['/borrows/:id', '/borrow/:id'], updateBorrowHandler);
+app.patch(['/borrows/:id', '/borrow/:id'], updateBorrowHandler);
 
 app.get('/', (req, res) => {
   res.send('Hello World!')
