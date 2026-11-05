@@ -11,7 +11,7 @@ app.use(cors())
 app.use(express.json())
 
 // JWKS endpoint configuration to verify JWT tokens issued by Better Auth
-const JWKS_URL = process.env.JWKS_URL || 'http://localhost:3000/api/auth/jwks';
+const JWKS_URL = process.env.JWKS_URL;
 const JWKS = createRemoteJWKSet(new URL(JWKS_URL));
 
 // Middleware to verify JWT token using JWKS endpoint
@@ -50,7 +50,7 @@ const bookCollection = db.collection("books");
 const borrowCollection = db.collection("borrows");
 
 // POST /books and /add-book
-app.post(['/books', '/add-book'], async (req, res) => {
+app.post(['/books', '/add-book'], verifyToken, async (req, res) => {
   try {
     const data = {
       ...req.body,
@@ -154,11 +154,11 @@ const updateBookHandler = async (req, res) => {
   }
 };
 
-app.put('/books/:id', updateBookHandler);
-app.patch('/books/:id', updateBookHandler);
+app.put('/books/:id', verifyToken, updateBookHandler);
+app.patch('/books/:id', verifyToken, updateBookHandler);
 
 // DELETE /books/:id (Delete a book)
-app.delete('/books/:id', async (req, res) => {
+app.delete('/books/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     let query = {};
@@ -180,7 +180,7 @@ app.delete('/books/:id', async (req, res) => {
 });
 
 // GET /books/:id (Get single book)
-app.get('/books/:id', async (req, res) => {
+app.get('/books/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     let query = {};
@@ -201,11 +201,13 @@ app.get('/books/:id', async (req, res) => {
 })
 
 // POST /borrows (Borrow a book)
-app.post('/borrows', async (req, res) => {
+app.post('/borrows', verifyToken, async (req, res) => {
   try {
     const { bookId, bookTitle, bookImage, userName, userEmail, borrowDate, returnDate, bookAuthor, bookCategory } = req.body;
+    const effectiveEmail = userEmail || req.user?.email;
+    const effectiveName = userName || req.user?.name;
 
-    if (!bookId || !userEmail) {
+    if (!bookId || !effectiveEmail) {
       return res.status(400).send({ error: "bookId and userEmail are required." });
     }
 
@@ -226,7 +228,7 @@ app.post('/borrows', async (req, res) => {
       return res.status(400).send({ error: "No available copies left for borrowing." });
     }
 
-    const cleanEmail = String(userEmail).trim().toLowerCase();
+    const cleanEmail = String(effectiveEmail).trim().toLowerCase();
 
     // Prevent duplicate active borrowing by the same user
     const existingBorrow = await borrowCollection.findOne({
@@ -235,7 +237,7 @@ app.post('/borrows', async (req, res) => {
     });
 
     if (existingBorrow) {
-      return res.status(400).send({ error: "You have already borrowed this book." });
+      return res.status(400).send({ error: "You cannot borrow the same book two times at the same time." });
     }
 
     // Atomic decrement of available copies
@@ -250,7 +252,7 @@ app.post('/borrows', async (req, res) => {
       bookImage: bookImage || book.image || "",
       bookAuthor: bookAuthor || book.author || "",
       bookCategory: bookCategory || book.category || "Fiction",
-      userName: userName || "Library Reader",
+      userName: effectiveName || "Library Reader",
       userEmail: cleanEmail,
       borrowDate: borrowDate || new Date().toISOString(),
       returnDate: returnDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
@@ -271,9 +273,9 @@ app.post('/borrows', async (req, res) => {
 });
 
 // GET /borrows (Get borrowed books for current user)
-app.get('/borrows', async (req, res) => {
+app.get('/borrows', verifyToken, async (req, res) => {
   try {
-    const targetEmail = req.query.userEmail || req.query.email;
+    const targetEmail = req.user?.email || req.query.userEmail || req.query.email;
     const query = targetEmail
       ? { userEmail: { $regex: new RegExp(`^${String(targetEmail).trim()}$`, 'i') } }
       : {};
@@ -286,7 +288,7 @@ app.get('/borrows', async (req, res) => {
 });
 
 // DELETE /borrows/:id (Return a book)
-app.delete('/borrows/:id', async (req, res) => {
+app.delete('/borrows/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     let borrowQuery = {};
@@ -362,8 +364,8 @@ const updateBorrowHandler = async (req, res) => {
   }
 };
 
-app.put(['/borrows/:id', '/borrow/:id'], updateBorrowHandler);
-app.patch(['/borrows/:id', '/borrow/:id'], updateBorrowHandler);
+app.put(['/borrows/:id', '/borrow/:id'], verifyToken, updateBorrowHandler);
+app.patch(['/borrows/:id', '/borrow/:id'], verifyToken, updateBorrowHandler);
 
 // GET /verify-token (Verify JWT token via JWKS endpoint and return decoded user info)
 app.get('/verify-token', verifyToken, (req, res) => {
